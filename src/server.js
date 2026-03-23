@@ -17,6 +17,8 @@ const PORT = config.port;
 const UPSTREAM_BASE_URL = config.upstreamBaseUrl;
 const UPSTREAM_CHAT_PATH = config.upstreamChatPath;
 const UPSTREAM_TIMEOUT_MS = config.upstreamTimeoutMs;
+const UPSTREAM_COOKIES = config.upstreamCookies;
+const UPSTREAM_HEADER_DEFAULTS = config.upstreamHeaderDefaults;
 const LOG_REQUEST_BODY = config.logRequestBody;
 const modelList = config.modelList;
 
@@ -92,7 +94,58 @@ function writeSse(res, dataObj) {
     res.write(`data: ${JSON.stringify(dataObj)}\n\n`);
 }
 
-async function forwardToUpstream({ token, upstreamBody, traceId }) {
+function pickUpstreamHeader(clientValue, fallbackValue) {
+    const fromClient = typeof clientValue === "string" ? clientValue.trim() : "";
+    if (fromClient) {
+        return fromClient;
+    }
+
+    const fromConfig = typeof fallbackValue === "string" ? fallbackValue.trim() : "";
+    if (fromConfig) {
+        return fromConfig;
+    }
+
+    return undefined;
+}
+
+function buildUpstreamHeaders(req, token) {
+    const clientHeaders = req && req.headers ? req.headers : {};
+    const selected = {
+        "Content-Type": "application/json",
+        Accept: pickUpstreamHeader(clientHeaders.accept, UPSTREAM_HEADER_DEFAULTS.accept),
+        "Accept-Encoding": pickUpstreamHeader(clientHeaders["accept-encoding"], UPSTREAM_HEADER_DEFAULTS.acceptEncoding),
+        "Accept-Language": pickUpstreamHeader(clientHeaders["accept-language"], UPSTREAM_HEADER_DEFAULTS.acceptLanguage),
+        "Cache-Control": pickUpstreamHeader(clientHeaders["cache-control"], UPSTREAM_HEADER_DEFAULTS.cacheControl),
+        Pragma: pickUpstreamHeader(clientHeaders.pragma, UPSTREAM_HEADER_DEFAULTS.pragma),
+        DNT: pickUpstreamHeader(clientHeaders.dnt, UPSTREAM_HEADER_DEFAULTS.dnt),
+        Priority: pickUpstreamHeader(clientHeaders.priority, UPSTREAM_HEADER_DEFAULTS.priority),
+        Referer: pickUpstreamHeader(clientHeaders.referer, UPSTREAM_HEADER_DEFAULTS.referer),
+        "Sec-CH-UA": pickUpstreamHeader(clientHeaders["sec-ch-ua"], UPSTREAM_HEADER_DEFAULTS.secChUa),
+        "Sec-CH-UA-Mobile": pickUpstreamHeader(clientHeaders["sec-ch-ua-mobile"], UPSTREAM_HEADER_DEFAULTS.secChUaMobile),
+        "Sec-CH-UA-Platform": pickUpstreamHeader(clientHeaders["sec-ch-ua-platform"], UPSTREAM_HEADER_DEFAULTS.secChUaPlatform),
+        "Sec-Fetch-Dest": pickUpstreamHeader(clientHeaders["sec-fetch-dest"], UPSTREAM_HEADER_DEFAULTS.secFetchDest),
+        "Sec-Fetch-Mode": pickUpstreamHeader(clientHeaders["sec-fetch-mode"], UPSTREAM_HEADER_DEFAULTS.secFetchMode),
+        "Sec-Fetch-Site": pickUpstreamHeader(clientHeaders["sec-fetch-site"], UPSTREAM_HEADER_DEFAULTS.secFetchSite),
+        "User-Agent": pickUpstreamHeader(clientHeaders["user-agent"], UPSTREAM_HEADER_DEFAULTS.userAgent),
+        "jm-token": token,
+        Cookie: pickUpstreamHeader(clientHeaders.cookie, UPSTREAM_COOKIES)
+    };
+
+    return Object.fromEntries(Object.entries(selected).filter(([, value]) => typeof value === "string" && value.length > 0));
+}
+
+function buildHeaderPresenceReport(headers) {
+    return {
+        hasJmToken: Boolean(headers["jm-token"]),
+        hasCookie: Boolean(headers.Cookie),
+        hasUserAgent: Boolean(headers["User-Agent"]),
+        hasReferer: Boolean(headers.Referer),
+        hasSecChUa: Boolean(headers["Sec-CH-UA"]),
+        hasSecFetch: Boolean(headers["Sec-Fetch-Mode"] && headers["Sec-Fetch-Site"])
+    };
+}
+
+async function forwardToUpstream({ req, token, upstreamBody, traceId }) {
     if (!UPSTREAM_BASE_URL) {
         const error = new Error("Missing UPSTREAM_BASE_URL in environment.");
         error.name = "ConfigError";
@@ -103,17 +156,21 @@ async function forwardToUpstream({ token, upstreamBody, traceId }) {
     const timeout = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
     try {
         const url = new URL(UPSTREAM_CHAT_PATH, UPSTREAM_BASE_URL).toString();
+        const headers = buildUpstreamHeaders(req, token);
+
         const response = await fetch(url, {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Accept: "*/*",
-                "jm-token": token,
-                "x-trace-id": traceId
-            },
+            headers,
             body: JSON.stringify(upstreamBody),
             signal: controller.signal
         });
+
+        console.log(JSON.stringify({
+            traceId,
+            route: "upstream_request",
+            upstreamPath: UPSTREAM_CHAT_PATH,
+            headers: buildHeaderPresenceReport(headers)
+        }));
 
         return response;
     } finally {
@@ -151,7 +208,7 @@ app.post("/v1/chat/completions", async (req, res) => {
     }));
 
     try {
-        const upstreamRes = await forwardToUpstream({ token, upstreamBody, traceId });
+        const upstreamRes = await forwardToUpstream({ req, token, upstreamBody, traceId });
 
         if (!upstreamRes.ok) {
             const text = await upstreamRes.text();
@@ -266,5 +323,5 @@ app.use((req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`xipuai-proxy listening on :${PORT}`);
+    console.log(`xipuai-proxy listening on: ${PORT}`);
 });
