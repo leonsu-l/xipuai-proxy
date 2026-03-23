@@ -74,7 +74,7 @@ function normalizeMessagesToText(messages) {
                     .filter(Boolean)
                     .join("\n");
             }
-            return `[${role}] ${content}`.trim();
+            return `${content}`.trim();
         })
         .filter(Boolean)
         .join("\n");
