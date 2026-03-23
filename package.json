@@ -1,0 +1,19 @@
+{
+    "name": "xipuai-proxy",
+    "version": "0.1.0",
+    "description": "OpenAI-compatible proxy for XIPU AI upstream",
+    "main": "src/server.js",
+    "type": "commonjs",
+    "scripts": {
+        "start": "node src/server.js",
+        "dev": "node --watch src/server.js"
+    },
+    "engines": {
+        "node": ">=18"
+    },
+    "dependencies": {
+        "cors": "^2.8.5",
+        "dotenv": "^16.4.7",
+        "express": "^4.21.2"
+    }
+}
